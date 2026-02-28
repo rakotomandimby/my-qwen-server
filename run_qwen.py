@@ -1,10 +1,14 @@
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen3-Coder-Next")
+MAX_BODY_BYTES = 1024 * 1024
+MAX_NEW_TOKENS_LIMIT = 8192
 _MODEL = None
 _TOKENIZER = None
+_MODEL_LOCK = threading.Lock()
 
 
 def get_model_and_tokenizer():
@@ -12,12 +16,14 @@ def get_model_and_tokenizer():
 
   global _MODEL, _TOKENIZER
   if _MODEL is None or _TOKENIZER is None:
-    _TOKENIZER = AutoTokenizer.from_pretrained(MODEL_NAME)
-    _MODEL = AutoModelForCausalLM.from_pretrained(
-      MODEL_NAME,
-      torch_dtype="auto",
-      device_map="auto",
-    )
+    with _MODEL_LOCK:
+      if _MODEL is None or _TOKENIZER is None:
+        _TOKENIZER = AutoTokenizer.from_pretrained(MODEL_NAME)
+        _MODEL = AutoModelForCausalLM.from_pretrained(
+          MODEL_NAME,
+          torch_dtype="auto",
+          device_map="auto",
+        )
   return _MODEL, _TOKENIZER
 
 
@@ -59,6 +65,9 @@ class PromptHandler(BaseHTTPRequestHandler):
       return
     try:
       length = int(self.headers.get("Content-Length", "0"))
+      if length > MAX_BODY_BYTES:
+        self._send_json(413, {"error": "payload_too_large"})
+        return
       body = self.rfile.read(length) if length > 0 else b"{}"
       data = json.loads(body.decode("utf-8"))
     except (ValueError, json.JSONDecodeError) as exc:
@@ -72,14 +81,28 @@ class PromptHandler(BaseHTTPRequestHandler):
 
     max_new_tokens = data.get("max_new_tokens", 2048)
     try:
-      content = generate_text(prompt, int(max_new_tokens))
+      max_new_tokens = int(max_new_tokens)
+    except (TypeError, ValueError):
+      self._send_json(400, {"error": "invalid_max_new_tokens"})
+      return
+
+    if max_new_tokens < 1 or max_new_tokens > MAX_NEW_TOKENS_LIMIT:
+      self._send_json(400, {"error": "invalid_max_new_tokens"})
+      return
+
+    try:
+      content = generate_text(prompt, max_new_tokens)
       self._send_json(200, {"content": content})
     except Exception as exc:
-      self._send_json(500, {"error": "generation_failed", "details": str(exc)})
+      print(
+        f"generation_failed for prompt_length={len(prompt)} "
+        f"max_new_tokens={max_new_tokens}: {exc}"
+      )
+      self._send_json(500, {"error": "generation_failed"})
 
 
 if __name__ == "__main__":
-  host = os.environ.get("HOST", "0.0.0.0")
+  host = os.environ.get("HOST", "127.0.0.1")
   port = int(os.environ.get("PORT", "8000"))
   server = ThreadingHTTPServer((host, port), PromptHandler)
   print(f"Server listening on http://{host}:{port}")
