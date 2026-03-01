@@ -1,52 +1,76 @@
+#!/usr/bin/env python3
+
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-import bitsandbytes as bnb
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-original_new = bnb.nn.Params4bit.__new__
+#MODEL_NAME = "Qwen/Qwen3-Next-80B-A3B-Instruct"
+MODEL_NAME = "Qwen/Qwen3-Coder-Next"
 
-def patched_new(cls, *args, **kwargs):
-    kwargs.pop('_is_hf_initialized', None)
-    return original_new(cls, *args, **kwargs)
 
-bnb.nn.Params4bit.__new__ = staticmethod(patched_new)
+def pick_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
-model_name = "Qwen/Qwen3-Coder-Next"
 
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.bfloat16, 
-    llm_int8_enable_fp32_cpu_offload=True  
-)
+def pick_dtype(device: str) -> torch.dtype:
+    # float16 for CUDA, float32 elsewhere for compatibility
+    if device == "cuda":
+        return torch.float16
+    return torch.float32
 
-# load the tokenizer and the model
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-  model_name,
-  torch_dtype="auto",
-  device_map="auto",
-  quantization_config=quantization_config,
-  offload_folder="model_offload"           
-)
 
-# prepare the model input
-prompt = "Write a quick sort algorithm."
-messages =[
-  {"role": "user", "content": prompt}
-]
-text = tokenizer.apply_chat_template(
-  messages,
-  tokenize=False,
-  add_generation_prompt=True,
-)
-model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+def main() -> None:
+    device = pick_device()
+    dtype = pick_dtype(device)
 
-# conduct text completion
-generated_ids = model.generate(
-    **model_inputs,
-    max_new_tokens=65536
-)
-output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
+    print(f"Loading tokenizer: {MODEL_NAME}")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
-content = tokenizer.decode(output_ids, skip_special_tokens=True)
+    print(f"Loading model on {device} with dtype={dtype} ...")
+    # IMPORTANT:
+    # - No load_in_4bit / load_in_8bit
+    # - No quantization_config
+    # - No device_map="auto"
+    # These avoid meta-tensor + bitsandbytes hook issues.
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=dtype,
+        trust_remote_code=True,
+        low_cpu_mem_usage=False,
+    )
+    model.to(device)
+    model.eval()
 
-print("content:", content)
+    prompt = "Explain in a few lines what a transformer model is."
+    messages = [{"role": "user", "content": prompt}]
+
+    # Qwen chat template
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    model_inputs = tokenizer([text], return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **model_inputs,
+            max_new_tokens=512,  # practical default
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+        )
+
+    output_ids = generated_ids[0][model_inputs["input_ids"].shape[1]:]
+    output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
+
+    print("\n=== Model output ===\n")
+    print(output_text)
+
+
+if __name__ == "__main__":
+    main()
