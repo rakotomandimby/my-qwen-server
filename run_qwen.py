@@ -68,9 +68,9 @@ def main() -> None:
 
     try:
         model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
-    except AttributeError as exc:
-        if "Int8Params" in str(exc) and "SCB" in str(exc) and "quantization_config" in model_kwargs:
-            print("bitsandbytes int8 load failed; retrying with CPU/GPU offload only...")
+    except (AttributeError, ImportError, RuntimeError, ValueError) as exc:
+        if "quantization_config" in model_kwargs:
+            print(f"bitsandbytes int8 load failed with: {str(exc)}; retrying with CPU/GPU offload only...")
             model_kwargs.pop("quantization_config", None)
             model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
         else:
