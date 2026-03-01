@@ -27,10 +27,15 @@ def pick_dtype(device: str) -> torch.dtype:
 def pick_max_memory() -> dict:
     # Keep headroom for CUDA context/system processes.
     total_vram_gib = int(torch.cuda.get_device_properties(0).total_memory / (1024**3))
-    gpu_budget_gib = max(1, total_vram_gib - 1)
+    gpu_budget_gib = max(1, total_vram_gib - 2)
+    try:
+        total_ram_gib = int((os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024**3))
+    except (AttributeError, ValueError, OSError):
+        total_ram_gib = 64
+    cpu_budget_gib = max(4, total_ram_gib - 8)
     return {
         0: f"{gpu_budget_gib}GiB",
-        "cpu": "56GiB",
+        "cpu": f"{cpu_budget_gib}GiB",
     }
 
 
