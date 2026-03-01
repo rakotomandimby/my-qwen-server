@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+import os
+
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 #MODEL_NAME = "Qwen/Qwen3-Next-80B-A3B-Instruct"
 MODEL_NAME = "Qwen/Qwen3-Coder-Next"
@@ -22,6 +24,16 @@ def pick_dtype(device: str) -> torch.dtype:
     return torch.float32
 
 
+def pick_max_memory() -> dict:
+    # Keep headroom for CUDA context/system processes.
+    total_vram_gib = int(torch.cuda.get_device_properties(0).total_memory / (1024**3))
+    gpu_budget_gib = max(1, total_vram_gib - 1)
+    return {
+        0: f"{gpu_budget_gib}GiB",
+        "cpu": "56GiB",
+    }
+
+
 def main() -> None:
     device = pick_device()
     dtype = pick_dtype(device)
@@ -30,18 +42,25 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
     print(f"Loading model on {device} with dtype={dtype} ...")
-    # IMPORTANT:
-    # - No load_in_4bit / load_in_8bit
-    # - No quantization_config
-    # - No device_map="auto"
-    # These avoid meta-tensor + bitsandbytes hook issues.
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=dtype,
-        trust_remote_code=True,
-        low_cpu_mem_usage=False,
-    )
-    model.to(device)
+    model_kwargs = {
+        "torch_dtype": dtype,
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": True,
+    }
+    if device == "cuda":
+        os.makedirs("offload", exist_ok=True)
+        model_kwargs.update(
+            {
+                "device_map": "auto",
+                "max_memory": pick_max_memory(),
+                "offload_folder": "offload",
+                "quantization_config": BitsAndBytesConfig(load_in_8bit=True),
+            }
+        )
+
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
+    if device != "cuda":
+        model.to(device)
     model.eval()
 
     prompt = "Explain in a few lines what a transformer model is."
