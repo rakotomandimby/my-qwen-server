@@ -48,7 +48,7 @@ def main() -> None:
 
     print(f"Loading model on {device} with dtype={dtype} ...")
     model_kwargs = {
-        "dtype": dtype,
+        "torch_dtype": dtype,
         "trust_remote_code": True,
         "low_cpu_mem_usage": True,
     }
@@ -66,7 +66,15 @@ def main() -> None:
             }
         )
 
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
+    try:
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
+    except AttributeError as exc:
+        if "Int8Params" in str(exc) and "SCB" in str(exc) and "quantization_config" in model_kwargs:
+            print("bitsandbytes int8 load failed; retrying with CPU/GPU offload only...")
+            model_kwargs.pop("quantization_config", None)
+            model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
+        else:
+            raise
     if device != "cuda":
         model.to(device)
     model.eval()
