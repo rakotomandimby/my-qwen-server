@@ -1,109 +1,52 @@
-import json
-import os
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+import bitsandbytes as bnb
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen3-Coder-Next")
-MAX_BODY_BYTES = 1024 * 1024
-MAX_NEW_TOKENS_LIMIT = 8192
-_MODEL = None
-_TOKENIZER = None
-_MODEL_LOCK = threading.Lock()
+original_new = bnb.nn.Params4bit.__new__
 
+def patched_new(cls, *args, **kwargs):
+    kwargs.pop('_is_hf_initialized', None)
+    return original_new(cls, *args, **kwargs)
 
-def get_model_and_tokenizer():
-  from transformers import AutoModelForCausalLM, AutoTokenizer
+bnb.nn.Params4bit.__new__ = staticmethod(patched_new)
 
-  global _MODEL, _TOKENIZER
-  if _MODEL is None or _TOKENIZER is None:
-    with _MODEL_LOCK:
-      if _MODEL is None or _TOKENIZER is None:
-        _TOKENIZER = AutoTokenizer.from_pretrained(MODEL_NAME)
-        _MODEL = AutoModelForCausalLM.from_pretrained(
-          MODEL_NAME,
-          torch_dtype="auto",
-          device_map="auto",
-        )
-  return _MODEL, _TOKENIZER
+model_name = "Qwen/Qwen3-Coder-Next"
 
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.bfloat16, 
+    llm_int8_enable_fp32_cpu_offload=True  
+)
 
-def generate_text(prompt, max_new_tokens=2048):
-  model, tokenizer = get_model_and_tokenizer()
-  messages = [{"role": "user", "content": prompt}]
-  text = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True,
-  )
-  model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-  generated_ids = model.generate(
+# load the tokenizer and the model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+  model_name,
+  torch_dtype="auto",
+  device_map="auto",
+  quantization_config=quantization_config,
+  offload_folder="model_offload"           
+)
+
+# prepare the model input
+prompt = "Write a quick sort algorithm."
+messages =[
+  {"role": "user", "content": prompt}
+]
+text = tokenizer.apply_chat_template(
+  messages,
+  tokenize=False,
+  add_generation_prompt=True,
+)
+model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+# conduct text completion
+generated_ids = model.generate(
     **model_inputs,
-    max_new_tokens=max_new_tokens,
-  )
-  output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
-  return tokenizer.decode(output_ids, skip_special_tokens=True)
+    max_new_tokens=65536
+)
+output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
 
+content = tokenizer.decode(output_ids, skip_special_tokens=True)
 
-class PromptHandler(BaseHTTPRequestHandler):
-  def _send_json(self, status_code, payload):
-    encoded = json.dumps(payload).encode("utf-8")
-    self.send_response(status_code)
-    self.send_header("Content-Type", "application/json")
-    self.send_header("Content-Length", str(len(encoded)))
-    self.end_headers()
-    self.wfile.write(encoded)
-
-  def do_GET(self):
-    if self.path == "/health":
-      self._send_json(200, {"status": "ok"})
-      return
-    self._send_json(404, {"error": "not_found"})
-
-  def do_POST(self):
-    if self.path != "/prompt":
-      self._send_json(404, {"error": "not_found"})
-      return
-    try:
-      length = int(self.headers.get("Content-Length", "0"))
-      if length > MAX_BODY_BYTES:
-        self._send_json(413, {"error": "payload_too_large"})
-        return
-      body = self.rfile.read(length) if length > 0 else b"{}"
-      data = json.loads(body.decode("utf-8"))
-    except (ValueError, json.JSONDecodeError) as exc:
-      self._send_json(400, {"error": "invalid_json", "details": str(exc)})
-      return
-
-    prompt = data.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-      self._send_json(400, {"error": "invalid_prompt"})
-      return
-
-    max_new_tokens = data.get("max_new_tokens", 2048)
-    try:
-      max_new_tokens = int(max_new_tokens)
-    except (TypeError, ValueError):
-      self._send_json(400, {"error": "invalid_max_new_tokens"})
-      return
-
-    if max_new_tokens < 1 or max_new_tokens > MAX_NEW_TOKENS_LIMIT:
-      self._send_json(400, {"error": "invalid_max_new_tokens"})
-      return
-
-    try:
-      content = generate_text(prompt, max_new_tokens)
-      self._send_json(200, {"content": content})
-    except Exception as exc:
-      print(
-        f"generation_failed for prompt_length={len(prompt)} "
-        f"max_new_tokens={max_new_tokens}: {exc}"
-      )
-      self._send_json(500, {"error": "generation_failed"})
-
-
-if __name__ == "__main__":
-  host = os.environ.get("HOST", "127.0.0.1")
-  port = int(os.environ.get("PORT", "8000"))
-  server = ThreadingHTTPServer((host, port), PromptHandler)
-  print(f"Server listening on http://{host}:{port}")
-  server.serve_forever()
+print("content:", content)
