@@ -48,7 +48,7 @@ def main() -> None:
 
     print(f"Loading model on {device} with dtype={dtype} ...")
     model_kwargs = {
-        "torch_dtype": dtype,
+        "dtype": dtype,
         "trust_remote_code": True,
         "low_cpu_mem_usage": True,
     }
@@ -59,7 +59,10 @@ def main() -> None:
                 "device_map": "auto",
                 "max_memory": pick_max_memory(),
                 "offload_folder": "offload",
-                "quantization_config": BitsAndBytesConfig(load_in_8bit=True),
+                "quantization_config": BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True,
+                ),
             }
         )
 
