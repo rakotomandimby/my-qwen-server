@@ -334,6 +334,9 @@ def make_handler(generate: Callable[[str], str]):
             self.end_headers()
             self.wfile.write(response)
 
+        def log_message(self, format, *args):
+            return
+
         def do_POST(self):
             if self.path != "/":
                 self.send_json(404, {"error": "Not found"})
