@@ -137,6 +137,37 @@ class RunQwenConfigCompatibilityTests(unittest.TestCase):
         self.assertEqual(config.vocab_size, 1234)
         self.assertEqual(config.pad_token_id, 42)
 
+    def test_prefers_conditional_generation_loader_for_composite_qwen35_config(self):
+        causal_loader = type("AutoModelForCausalLM", (), {})
+        conditional_loader = type("Qwen3_5ForConditionalGeneration", (), {})
+        self.run_qwen.AutoModelForCausalLM = causal_loader
+        self.run_qwen.transformers.Qwen3_5ForConditionalGeneration = conditional_loader
+
+        config = types.SimpleNamespace(
+            architectures=["Qwen3_5ForConditionalGeneration"],
+            text_config={},
+            vision_config={},
+        )
+
+        loader = self.run_qwen.get_model_loader(config)
+
+        self.assertIs(loader, conditional_loader)
+
+    def test_falls_back_to_causal_lm_loader_when_conditional_loader_is_unavailable(self):
+        causal_loader = type("AutoModelForCausalLM", (), {})
+        self.run_qwen.AutoModelForCausalLM = causal_loader
+        self.run_qwen.transformers.Qwen3_5ForConditionalGeneration = None
+
+        config = types.SimpleNamespace(
+            architectures=["Qwen3_5ForConditionalGeneration"],
+            text_config={},
+            vision_config={},
+        )
+
+        loader = self.run_qwen.get_model_loader(config)
+
+        self.assertIs(loader, causal_loader)
+
 
 if __name__ == "__main__":
     unittest.main()

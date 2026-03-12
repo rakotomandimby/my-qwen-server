@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import transformers
 import torch
 from transformers import (
     AutoConfig,
@@ -139,6 +140,20 @@ def ensure_pad_token_id(config, tokenizer):
     if pad_token_id is not None:
         config.pad_token_id = pad_token_id
 
+def get_model_loader(config):
+    """Selects the safest loader class for the checkpoint-backed config."""
+    conditional_generation_cls = getattr(transformers, "Qwen3_5ForConditionalGeneration", None)
+    architectures = get_config_value(config, "architectures") or ()
+
+    if conditional_generation_cls is not None:
+        if "Qwen3_5ForConditionalGeneration" in architectures:
+            return conditional_generation_cls
+
+        if getattr(config, "text_config", None) is not None and getattr(config, "vision_config", None) is not None:
+            return conditional_generation_cls
+
+    return AutoModelForCausalLM
+
 def get_device_and_dtype():
     """Identifies the best available hardware accelerator and compatible dtype."""
     if torch.cuda.is_available():
@@ -220,9 +235,10 @@ def main() -> None:
     else:
         model_kwargs["low_cpu_mem_usage"] = True
 
-    print(f"Loading model on {device}...")
+    model_loader = get_model_loader(config)
+    print(f"Loading model on {device} with {model_loader.__name__}...")
     try:
-        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
+        model = model_loader.from_pretrained(MODEL_NAME, **model_kwargs)
     except Exception as e:
         print(f"\nFailed to load model! Error details: {e}\n")
         raise
