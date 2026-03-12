@@ -10,6 +10,24 @@ from transformers import (
 )
 
 MODEL_NAME = "Qwen/Qwen3.5-2B"
+TEXT_CONFIG_FIELDS = (
+    "attention_dropout",
+    "head_dim",
+    "hidden_act",
+    "hidden_size",
+    "initializer_range",
+    "intermediate_size",
+    "max_position_embeddings",
+    "max_window_layers",
+    "num_attention_heads",
+    "num_hidden_layers",
+    "num_key_value_heads",
+    "rms_norm_eps",
+    "rope_scaling",
+    "rope_theta",
+    "sliding_window",
+    "use_sliding_window",
+)
 
 def ensure_vocab_size(config, tokenizer):
     """Ensures config.vocab_size using text_config.vocab_size, tokenizer.vocab_size, or len(tokenizer)."""
@@ -40,16 +58,11 @@ def ensure_text_config_fields(config):
     if text_config is None:
         return
 
-    if isinstance(text_config, dict):
-        items = text_config.items()
-    elif hasattr(text_config, "to_dict"):
-        items = text_config.to_dict().items()
-    else:
-        items = vars(text_config).items()
-
-    for key, value in items:
-        if key.startswith("_"):
-            continue
+    for key in TEXT_CONFIG_FIELDS:
+        if isinstance(text_config, dict):
+            value = text_config.get(key)
+        else:
+            value = getattr(text_config, key, None)
         if getattr(config, key, None) is None and value is not None:
             setattr(config, key, value)
 
