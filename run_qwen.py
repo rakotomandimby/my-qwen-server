@@ -12,15 +12,21 @@ from transformers import (
 MODEL_NAME = "Qwen/Qwen3.5-2B"
 
 def ensure_vocab_size(config, tokenizer):
-    """Backfills top-level vocab_size for configs that only define nested text vocab."""
+    """Ensures config.vocab_size using text_config.vocab_size, tokenizer.vocab_size, or len(tokenizer)."""
     if getattr(config, "vocab_size", None) is not None:
         return
 
-    vocab_size = getattr(getattr(config, "text_config", None), "vocab_size", None)
+    text_config = getattr(config, "text_config", None)
+    vocab_size = getattr(text_config, "vocab_size", None)
     if vocab_size is None:
         vocab_size = getattr(tokenizer, "vocab_size", None)
     if vocab_size is None:
-        vocab_size = len(tokenizer)
+        try:
+            vocab_size = len(tokenizer)
+        except TypeError as exc:
+            raise ValueError("Unable to determine vocab_size from config or tokenizer.") from exc
+    if vocab_size is None:
+        raise ValueError("Unable to determine vocab_size from config or tokenizer.")
     config.vocab_size = vocab_size
 
 def get_device_and_dtype():
