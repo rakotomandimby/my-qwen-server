@@ -41,7 +41,14 @@ def ensure_hidden_size(config):
             config.hidden_size = hidden_size
 
 def ensure_pad_token_id(config, tokenizer):
-    """Ensures config.pad_token_id using tokenizer or text_config fallbacks."""
+    """Ensure ``config.pad_token_id`` exists before model initialization.
+
+    Fallback order:
+    1. ``config.text_config.pad_token_id``
+    2. ``tokenizer.pad_token_id``
+    3. ``config.eos_token_id``
+    4. ``tokenizer.eos_token_id``
+    """
     if getattr(config, "pad_token_id", None) is not None:
         return
 
