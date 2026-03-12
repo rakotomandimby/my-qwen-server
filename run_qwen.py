@@ -12,30 +12,51 @@ from transformers import (
 MODEL_NAME = "Qwen/Qwen3.5-2B"
 TEXT_CONFIG_FIELDS = (
     "attention_dropout",
+    "attention_bias",
+    "bos_token_id",
+    "eos_token_id",
     "head_dim",
     "hidden_act",
     "hidden_size",
     "initializer_range",
     "intermediate_size",
+    "layer_types",
+    "linear_conv_kernel_dim",
+    "linear_key_head_dim",
+    "linear_num_key_heads",
+    "linear_num_value_heads",
+    "linear_value_head_dim",
     "max_position_embeddings",
     "max_window_layers",
     "num_attention_heads",
     "num_hidden_layers",
     "num_key_value_heads",
+    "pad_token_id",
     "rms_norm_eps",
+    "rope_parameters",
     "rope_scaling",
     "rope_theta",
     "sliding_window",
+    "tie_word_embeddings",
     "use_sliding_window",
+    "use_cache",
 )
+
+def get_config_value(config, key):
+    """Gets a config value from either a config object or a plain dict."""
+    if config is None:
+        return None
+    if isinstance(config, dict):
+        return config.get(key)
+    return getattr(config, key, None)
 
 def ensure_vocab_size(config, tokenizer):
     """Ensures config.vocab_size using text_config.vocab_size, tokenizer.vocab_size, or len(tokenizer)."""
-    if getattr(config, "vocab_size", None) is not None:
+    if get_config_value(config, "vocab_size") is not None:
         return
 
     text_config = getattr(config, "text_config", None)
-    vocab_size = getattr(text_config, "vocab_size", None)
+    vocab_size = get_config_value(text_config, "vocab_size")
     if vocab_size is None:
         vocab_size = getattr(tokenizer, "vocab_size", None)
     if vocab_size is None:
@@ -59,12 +80,40 @@ def ensure_text_config_fields(config):
         return
 
     for key in TEXT_CONFIG_FIELDS:
-        if isinstance(text_config, dict):
-            value = text_config.get(key)
-        else:
-            value = getattr(text_config, key, None)
-        if getattr(config, key, None) is None and value is not None:
+        value = get_config_value(text_config, key)
+        if get_config_value(config, key) is None and value is not None:
             setattr(config, key, value)
+
+def ensure_layer_types(config):
+    """Ensures ``config.layer_types`` exists for Qwen 3.5 text-model loading.
+
+    Older Transformers releases may instantiate the top-level ``Qwen3_5Config``
+    without copying ``text_config.layer_types`` to the root config, even though
+    the model loader expects it there. When the checkpoint also omits an
+    explicit ``layer_types`` list, mirror the library default pattern.
+    """
+    if get_config_value(config, "layer_types") is not None:
+        return
+
+    num_hidden_layers = get_config_value(config, "num_hidden_layers")
+    if num_hidden_layers is None:
+        return
+
+    text_config = getattr(config, "text_config", None)
+    interval_pattern = get_config_value(text_config, "full_attention_interval")
+    if interval_pattern is None:
+        interval_pattern = get_config_value(config, "full_attention_interval")
+    if interval_pattern is None:
+        # Mirrors the Qwen 3.5 Transformers config default when the checkpoint
+        # does not provide an explicit full_attention_interval value.
+        interval_pattern = 4
+    elif not isinstance(interval_pattern, int) or interval_pattern <= 0:
+        raise ValueError("full_attention_interval must be a positive integer.")
+
+    config.layer_types = [
+        "full_attention" if (layer_idx + 1) % interval_pattern == 0 else "linear_attention"
+        for layer_idx in range(num_hidden_layers)
+    ]
 
 def ensure_pad_token_id(config, tokenizer):
     """Ensure ``config.pad_token_id`` exists before model initialization.
@@ -75,15 +124,15 @@ def ensure_pad_token_id(config, tokenizer):
     3. ``config.eos_token_id``
     4. ``tokenizer.eos_token_id``
     """
-    if getattr(config, "pad_token_id", None) is not None:
+    if get_config_value(config, "pad_token_id") is not None:
         return
 
     text_config = getattr(config, "text_config", None)
-    pad_token_id = getattr(text_config, "pad_token_id", None)
+    pad_token_id = get_config_value(text_config, "pad_token_id")
     if pad_token_id is None:
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
     if pad_token_id is None:
-        pad_token_id = getattr(config, "eos_token_id", None)
+        pad_token_id = get_config_value(config, "eos_token_id")
     if pad_token_id is None:
         pad_token_id = getattr(tokenizer, "eos_token_id", None)
 
@@ -134,6 +183,7 @@ def main() -> None:
     config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
     ensure_vocab_size(config, tokenizer)
     ensure_text_config_fields(config)
+    ensure_layer_types(config)
     ensure_pad_token_id(config, tokenizer)
     
     model_kwargs = {
