@@ -3,12 +3,31 @@
 import os
 import torch
 from transformers import (
+    AutoConfig,
     AutoTokenizer,
     AutoModelForCausalLM,
     BitsAndBytesConfig
 )
 
 MODEL_NAME = "Qwen/Qwen3.5-2B"
+
+def ensure_vocab_size(config, tokenizer):
+    """Ensures config.vocab_size using text_config.vocab_size, tokenizer.vocab_size, or len(tokenizer)."""
+    if getattr(config, "vocab_size", None) is not None:
+        return
+
+    text_config = getattr(config, "text_config", None)
+    vocab_size = getattr(text_config, "vocab_size", None)
+    if vocab_size is None:
+        vocab_size = getattr(tokenizer, "vocab_size", None)
+    if vocab_size is None:
+        try:
+            vocab_size = len(tokenizer)
+        except TypeError as exc:
+            raise ValueError("Unable to determine vocab_size from config or tokenizer.") from exc
+    if vocab_size is None:
+        raise ValueError("Unable to determine vocab_size from config or tokenizer.")
+    config.vocab_size = vocab_size
 
 def get_device_and_dtype():
     """Identifies the best available hardware accelerator and compatible dtype."""
@@ -51,9 +70,12 @@ def main() -> None:
 
     print(f"Loading tokenizer: {MODEL_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    ensure_vocab_size(config, tokenizer)
     
     model_kwargs = {
         "torch_dtype": dtype,
+        "config": config,
         "trust_remote_code": True,
     }
 
