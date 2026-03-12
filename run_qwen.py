@@ -29,6 +29,17 @@ def ensure_vocab_size(config, tokenizer):
         raise ValueError("Unable to determine vocab_size from config or tokenizer.")
     config.vocab_size = vocab_size
 
+def ensure_hidden_size(config):
+    """Copies hidden_size from text_config when missing at top level."""
+    text_config = getattr(config, "text_config", None)
+    if text_config is None:
+        return
+
+    if getattr(config, "hidden_size", None) is None:
+        hidden_size = getattr(text_config, "hidden_size", None)
+        if hidden_size is not None:
+            config.hidden_size = hidden_size
+
 def get_device_and_dtype():
     """Identifies the best available hardware accelerator and compatible dtype."""
     if torch.cuda.is_available():
@@ -72,6 +83,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
     ensure_vocab_size(config, tokenizer)
+    ensure_hidden_size(config)
     
     model_kwargs = {
         "torch_dtype": dtype,
