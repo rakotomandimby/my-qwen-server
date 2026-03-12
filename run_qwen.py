@@ -4,6 +4,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import sys
 from typing import Callable
 
 try:
@@ -334,8 +335,9 @@ def make_handler(generate: Callable[[str], str]):
             self.end_headers()
             self.wfile.write(response)
 
-        def log_message(self, format, *args):
-            return
+        def log_message(self, message_format, *args):
+            if os.environ.get("QWEN_HTTP_LOGS") == "1":
+                super().log_message(message_format, *args)
 
         def do_POST(self):
             if self.path != "/":
@@ -381,9 +383,19 @@ def serve_http(tokenizer, model, host, port):
 
 
 def parse_args():
+    port_value = os.environ.get("QWEN_PORT", "8000")
+    try:
+        default_port = int(port_value)
+    except ValueError:
+        print(
+            f"QWEN_PORT must be a valid integer; {port_value!r} is invalid. Falling back to 8000.",
+            file=sys.stderr,
+        )
+        default_port = 8000
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=os.environ.get("QWEN_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("QWEN_PORT", "8000")))
+    parser.add_argument("--port", type=int, default=default_port)
     parser.add_argument(
         "--prompt",
         help="Generate a single response and exit instead of starting the HTTP server.",
