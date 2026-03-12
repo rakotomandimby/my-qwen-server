@@ -3,17 +3,10 @@
 import os
 import torch
 from transformers import (
-    AutoTokenizer, 
+    AutoTokenizer,
+    AutoModelForCausalLM,
     BitsAndBytesConfig
 )
-
-# --- FIX: Robust import for the correct Vision-Language AutoClass ---
-try:
-    # For newer transformers versions (>= 5.0.0)
-    from transformers import AutoModelForImageTextToText as AutoModelForVLM
-except ImportError:
-    # For standard transformers versions (4.x)
-    from transformers import AutoModelForVision2Seq as AutoModelForVLM
 
 MODEL_NAME = "Qwen/Qwen3.5-2B"
 
@@ -59,10 +52,8 @@ def main() -> None:
     print(f"Loading tokenizer: {MODEL_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     
-    # Base loading arguments. We no longer patch the config.
     model_kwargs = {
         "torch_dtype": dtype,
-        "dtype": dtype,
         "trust_remote_code": True,
     }
 
@@ -96,8 +87,7 @@ def main() -> None:
 
     print(f"Loading model on {device}...")
     try:
-        # <-- FIX: Uses the successfully imported Vision-Language class
-        model = AutoModelForVLM.from_pretrained(MODEL_NAME, **model_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
     except Exception as e:
         print(f"\nFailed to load model! Error details: {e}\n")
         raise
