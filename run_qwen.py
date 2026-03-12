@@ -149,6 +149,9 @@ def get_model_loader(config):
         if "Qwen3_5ForConditionalGeneration" in architectures:
             return conditional_generation_cls
 
+        # Some checkpoints expose the composite Qwen 3.5 config without an
+        # architectures hint, but the paired weights still live under the
+        # conditional-generation wrapper's ``model.language_model.*`` prefix.
         if getattr(config, "text_config", None) is not None and getattr(config, "vision_config", None) is not None:
             return conditional_generation_cls
 
