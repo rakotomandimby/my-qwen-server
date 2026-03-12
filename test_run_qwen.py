@@ -161,6 +161,52 @@ class RunQwenConfigCompatibilityTests(unittest.TestCase):
 
         self.assertIs(loader, conditional_loader)
 
+    def test_prefers_conditional_generation_loader_for_text_only_qwen35_config(self):
+        causal_loader = type(
+            "AutoModelForCausalLM",
+            (),
+            {"from_pretrained": classmethod(lambda cls, *args, **kwargs: None)},
+        )
+        conditional_loader = type(
+            "Qwen3_5ForConditionalGeneration",
+            (),
+            {"from_pretrained": classmethod(lambda cls, *args, **kwargs: None)},
+        )
+        self.run_qwen.AutoModelForCausalLM = causal_loader
+        self.run_qwen.transformers.Qwen3_5ForConditionalGeneration = conditional_loader
+
+        config = types.SimpleNamespace(
+            model_type="qwen3_5",
+            text_config={},
+        )
+
+        loader = self.run_qwen.get_model_loader(config)
+
+        self.assertIs(loader, conditional_loader)
+
+    def test_falls_back_to_causal_lm_loader_for_non_qwen_text_config(self):
+        causal_loader = type(
+            "AutoModelForCausalLM",
+            (),
+            {"from_pretrained": classmethod(lambda cls, *args, **kwargs: None)},
+        )
+        conditional_loader = type(
+            "Qwen3_5ForConditionalGeneration",
+            (),
+            {"from_pretrained": classmethod(lambda cls, *args, **kwargs: None)},
+        )
+        self.run_qwen.AutoModelForCausalLM = causal_loader
+        self.run_qwen.transformers.Qwen3_5ForConditionalGeneration = conditional_loader
+
+        config = types.SimpleNamespace(
+            model_type="llama",
+            text_config={},
+        )
+
+        loader = self.run_qwen.get_model_loader(config)
+
+        self.assertIs(loader, causal_loader)
+
     def test_falls_back_to_causal_lm_loader_when_conditional_loader_is_unavailable(self):
         causal_loader = type(
             "AutoModelForCausalLM",
@@ -174,6 +220,24 @@ class RunQwenConfigCompatibilityTests(unittest.TestCase):
             architectures=["Qwen3_5ForConditionalGeneration"],
             text_config={},
             vision_config={},
+        )
+
+        loader = self.run_qwen.get_model_loader(config)
+
+        self.assertIs(loader, causal_loader)
+
+    def test_falls_back_to_causal_lm_loader_for_text_only_qwen35_when_conditional_loader_is_unavailable(self):
+        causal_loader = type(
+            "AutoModelForCausalLM",
+            (),
+            {"from_pretrained": classmethod(lambda cls, *args, **kwargs: None)},
+        )
+        self.run_qwen.AutoModelForCausalLM = causal_loader
+        self.run_qwen.transformers.Qwen3_5ForConditionalGeneration = None
+
+        config = types.SimpleNamespace(
+            model_type="qwen3_5",
+            text_config={},
         )
 
         loader = self.run_qwen.get_model_loader(config)

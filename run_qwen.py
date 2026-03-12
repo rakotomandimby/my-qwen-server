@@ -144,6 +144,9 @@ def get_model_loader(config):
     """Selects the safest loader class for the checkpoint-backed config."""
     conditional_generation_cls = getattr(transformers, "Qwen3_5ForConditionalGeneration", None)
     architectures = get_config_value(config, "architectures") or ()
+    text_config = getattr(config, "text_config", None)
+    model_type = get_config_value(config, "model_type")
+    text_model_type = get_config_value(text_config, "model_type")
 
     if conditional_generation_cls is not None:
         if "Qwen3_5ForConditionalGeneration" in architectures:
@@ -152,7 +155,15 @@ def get_model_loader(config):
         # Some checkpoints expose the composite Qwen 3.5 config without an
         # architectures hint, but the paired weights still live under the
         # conditional-generation wrapper's ``model.language_model.*`` prefix.
-        if getattr(config, "text_config", None) is not None and getattr(config, "vision_config", None) is not None:
+        # Older/newer Transformers builds do not always surface the Qwen 3.5
+        # ``model_type`` on the same config level, so check both the wrapper
+        # config and the nested text config before falling back.
+        if text_config is not None and (model_type == "qwen3_5" or text_model_type == "qwen3_5"):
+            return conditional_generation_cls
+
+        # Keep supporting composite configs that do not expose a ``model_type``
+        # hint but still bundle text and vision sub-configs under the wrapper.
+        if text_config is not None and getattr(config, "vision_config", None) is not None:
             return conditional_generation_cls
 
     return AutoModelForCausalLM
