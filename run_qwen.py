@@ -68,7 +68,7 @@ def main() -> None:
     ensure_vocab_size(config, tokenizer)
     
     model_kwargs = {
-        "dtype": dtype,
+        "torch_dtype": dtype,
         "config": config,
         "trust_remote_code": True,
     }
