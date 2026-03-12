@@ -40,6 +40,23 @@ def ensure_hidden_size(config):
         if hidden_size is not None:
             config.hidden_size = hidden_size
 
+def ensure_pad_token_id(config, tokenizer):
+    """Ensures config.pad_token_id using tokenizer or text_config fallbacks."""
+    if getattr(config, "pad_token_id", None) is not None:
+        return
+
+    text_config = getattr(config, "text_config", None)
+    pad_token_id = getattr(text_config, "pad_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = getattr(config, "eos_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = getattr(tokenizer, "eos_token_id", None)
+
+    if pad_token_id is not None:
+        config.pad_token_id = pad_token_id
+
 def get_device_and_dtype():
     """Identifies the best available hardware accelerator and compatible dtype."""
     if torch.cuda.is_available():
@@ -84,6 +101,7 @@ def main() -> None:
     config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
     ensure_vocab_size(config, tokenizer)
     ensure_hidden_size(config)
+    ensure_pad_token_id(config, tokenizer)
     
     model_kwargs = {
         "torch_dtype": dtype,
