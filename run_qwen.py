@@ -1,14 +1,30 @@
 #!/usr/bin/env python3
 
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
-import transformers
-import torch
-from transformers import (
-    AutoConfig,
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig
-)
+import sys
+from typing import Callable
+
+try:
+    import transformers
+    import torch
+    from transformers import (
+        AutoConfig,
+        AutoTokenizer,
+        AutoModelForCausalLM,
+        BitsAndBytesConfig,
+    )
+    IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    transformers = None
+    torch = None
+    AutoConfig = None
+    AutoTokenizer = None
+    AutoModelForCausalLM = None
+    BitsAndBytesConfig = None
+    IMPORT_ERROR = exc
 
 MODEL_NAME = "Qwen/Qwen3.5-2B"
 TEXT_CONFIG_FIELDS = (
@@ -43,6 +59,7 @@ TEXT_CONFIG_FIELDS = (
     "use_cache",
 )
 
+
 def get_config_value(config, key):
     """Gets a config value from either a config object or a plain dict."""
     if config is None:
@@ -50,6 +67,15 @@ def get_config_value(config, key):
     if isinstance(config, dict):
         return config.get(key)
     return getattr(config, key, None)
+
+
+def require_dependencies():
+    """Raises a clear error when runtime ML dependencies are unavailable."""
+    if IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "Missing runtime dependency. Install torch and transformers to run this script."
+        ) from IMPORT_ERROR
+
 
 def ensure_vocab_size(config, tokenizer):
     """Ensures config.vocab_size using text_config.vocab_size, tokenizer.vocab_size, or len(tokenizer)."""
@@ -69,6 +95,7 @@ def ensure_vocab_size(config, tokenizer):
         raise ValueError("Unable to determine vocab_size from config or tokenizer.")
     config.vocab_size = vocab_size
 
+
 def ensure_text_config_fields(config):
     """Copies missing ``text_config`` fields to the top level when needed.
 
@@ -84,6 +111,7 @@ def ensure_text_config_fields(config):
         value = get_config_value(text_config, key)
         if get_config_value(config, key) is None and value is not None:
             setattr(config, key, value)
+
 
 def ensure_layer_types(config):
     """Ensures ``config.layer_types`` exists for Qwen 3.5 text-model loading.
@@ -116,6 +144,7 @@ def ensure_layer_types(config):
         for layer_idx in range(num_hidden_layers)
     ]
 
+
 def ensure_pad_token_id(config, tokenizer):
     """Ensure ``config.pad_token_id`` exists before model initialization.
 
@@ -139,6 +168,7 @@ def ensure_pad_token_id(config, tokenizer):
 
     if pad_token_id is not None:
         config.pad_token_id = pad_token_id
+
 
 def get_model_loader(config):
     """Selects the safest loader class for the checkpoint-backed config."""
@@ -168,6 +198,7 @@ def get_model_loader(config):
 
     return AutoModelForCausalLM
 
+
 def get_device_and_dtype():
     """Identifies the best available hardware accelerator and compatible dtype."""
     if torch.cuda.is_available():
@@ -181,30 +212,33 @@ def get_device_and_dtype():
         dtype = torch.float32
     return device, dtype
 
+
 def pick_max_memory():
     """Dynamically calculates max memory bounds to ensure stable CPU/Disk offloading."""
     if not torch.cuda.is_available():
         return None
-    
+
     # Leave 1 GB VRAM headroom for CUDA context & overhead
     total_vram_gib = int(torch.cuda.get_device_properties(0).total_memory / (1024**3))
     gpu_budget_gib = max(1, total_vram_gib - 1)
-    
+
     # Calculate System RAM
     try:
         total_ram_gib = int((os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024**3))
     except (AttributeError, ValueError, OSError):
         total_ram_gib = 32
-        
+
     # Leave 4 GB System RAM headroom for OS tasks
     cpu_budget_gib = max(4, total_ram_gib - 4)
-    
+
     return {
         0: f"{gpu_budget_gib}GiB",
         "cpu": f"{cpu_budget_gib}GiB",
     }
 
-def main() -> None:
+
+def load_model():
+    require_dependencies()
     device, dtype = get_device_and_dtype()
 
     print(f"Loading tokenizer: {MODEL_NAME}")
@@ -214,7 +248,7 @@ def main() -> None:
     ensure_text_config_fields(config)
     ensure_layer_types(config)
     ensure_pad_token_id(config, tokenizer)
-    
+
     model_kwargs = {
         "torch_dtype": dtype,
         "config": config,
@@ -224,11 +258,11 @@ def main() -> None:
     # --- GPU VRAM BUDGETING, QUANTIZATION & OFFLOADING ---
     if device == "cuda":
         model_kwargs["device_map"] = "auto"
-        
+
         # Explicit folder for layers that completely overflow RAM to Disk
         os.makedirs("offload", exist_ok=True)
         model_kwargs["offload_folder"] = "offload"
-        
+
         # Restrict memory bounds to guarantee stability
         mem_map = pick_max_memory()
         if mem_map:
@@ -236,7 +270,7 @@ def main() -> None:
 
         total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         print(f"Detected CUDA device with {total_vram_gb:.1f} GiB VRAM. Max mapped VRAM: {mem_map[0]}")
-        
+
         if total_vram_gb < 20.0:
             print("Using 4-bit NF4 quantization. Allowing fp32 CPU offloading for layers that don't fit...")
             model_kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -244,7 +278,7 @@ def main() -> None:
                 bnb_4bit_compute_dtype=dtype,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
-                llm_int8_enable_fp32_cpu_offload=True,  
+                llm_int8_enable_fp32_cpu_offload=True,
             )
     else:
         model_kwargs["low_cpu_mem_usage"] = True
@@ -259,11 +293,12 @@ def main() -> None:
 
     if device != "cuda":
         model.to(device)
-        
-    model.eval()
 
-    # --- PROMPTING ---
-    prompt = "Tell me about OCaml"
+    model.eval()
+    return tokenizer, model
+
+
+def generate_response(tokenizer, model, prompt):
     messages = [{"role": "user", "content": prompt}]
 
     print("Formatting prompt via chat template...")
@@ -285,13 +320,100 @@ def main() -> None:
             top_p=0.9,
         )
 
-    # --- OUTPUT PARSING ---
     input_length = model_inputs["input_ids"].shape[1]
     output_ids = generated_ids[0][input_length:]
-    output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
+    return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
-    print("\n=== Model output ===\n")
-    print(output_text.strip())
+
+def make_handler(generate: Callable[[str], str]):
+    class ChatHandler(BaseHTTPRequestHandler):
+        def send_json(self, status_code, payload):
+            response = json.dumps(payload).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, message_format, *args):
+            if os.environ.get("QWEN_HTTP_LOGS") == "1":
+                super().log_message(message_format, *args)
+
+        def do_POST(self):
+            if self.path != "/":
+                self.send_json(404, {"error": "Not found"})
+                return
+
+            content_length = self.headers.get("Content-Length")
+            if content_length is None:
+                self.send_json(400, {"error": "Missing request body"})
+                return
+
+            try:
+                raw_body = self.rfile.read(int(content_length))
+                payload = json.loads(raw_body.decode("utf-8"))
+            except (ValueError, json.JSONDecodeError):
+                self.send_json(400, {"error": "Request body must be valid JSON"})
+                return
+
+            prompt = payload.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                self.send_json(400, {"error": "Field 'prompt' must be a non-empty string"})
+                return
+
+            try:
+                output = generate(prompt.strip())
+            except Exception as exc:
+                self.send_json(500, {"error": str(exc)})
+                return
+
+            self.send_json(200, {"data": output})
+
+        def do_GET(self):
+            self.send_json(200, {"data": "POST JSON to / with a 'prompt' field"})
+
+    return ChatHandler
+
+
+def serve_http(tokenizer, model, host, port):
+    handler_class = make_handler(lambda prompt: generate_response(tokenizer, model, prompt))
+    with ThreadingHTTPServer((host, port), handler_class) as server:
+        print(f"Listening on http://{host}:{port}")
+        server.serve_forever()
+
+
+def parse_args():
+    port_value = os.environ.get("QWEN_PORT", "8000")
+    try:
+        default_port = int(port_value)
+    except ValueError:
+        print(
+            f"QWEN_PORT must be a valid integer; {port_value!r} is invalid. Falling back to 8000.",
+            file=sys.stderr,
+        )
+        default_port = 8000
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default=os.environ.get("QWEN_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=default_port)
+    parser.add_argument(
+        "--prompt",
+        help="Generate a single response and exit instead of starting the HTTP server.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    tokenizer, model = load_model()
+
+    if args.prompt:
+        output_text = generate_response(tokenizer, model, args.prompt)
+        print("\n=== Model output ===\n")
+        print(output_text)
+        return
+
+    serve_http(tokenizer, model, args.host, args.port)
 
 
 if __name__ == "__main__":
