@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path("/home/runner/work/my-qwen-server/my-qwen-server")
+REPO_ROOT = Path(__file__).resolve().parent
 MODULE_PATH = REPO_ROOT / "run_qwen.py"
 
 
@@ -92,6 +92,35 @@ class RunQwenConfigCompatibilityTests(unittest.TestCase):
             ],
         )
 
+    def test_layer_types_uses_root_full_attention_interval_when_needed(self):
+        config = types.SimpleNamespace(
+            num_hidden_layers=4,
+            full_attention_interval=2,
+            text_config={},
+        )
+
+        self.run_qwen.ensure_layer_types(config)
+
+        self.assertEqual(
+            config.layer_types,
+            [
+                "linear_attention",
+                "full_attention",
+                "linear_attention",
+                "full_attention",
+            ],
+        )
+
+    def test_layer_types_rejects_non_positive_interval(self):
+        config = types.SimpleNamespace(
+            num_hidden_layers=4,
+            full_attention_interval=0,
+            text_config={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "full_attention_interval"):
+            self.run_qwen.ensure_layer_types(config)
+
     def test_vocab_and_pad_token_id_support_dict_text_config(self):
         config = types.SimpleNamespace(
             text_config={
@@ -100,7 +129,7 @@ class RunQwenConfigCompatibilityTests(unittest.TestCase):
             },
             eos_token_id=7,
         )
-        tokenizer = types.SimpleNamespace(vocab_size=None, pad_token_id=None, eos_token_id=9)
+        tokenizer = types.SimpleNamespace(vocab_size=None, pad_token_id=None)
 
         self.run_qwen.ensure_vocab_size(config, tokenizer)
         self.run_qwen.ensure_pad_token_id(config, tokenizer)

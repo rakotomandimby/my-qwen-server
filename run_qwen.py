@@ -103,11 +103,15 @@ def ensure_layer_types(config):
     interval_pattern = get_config_value(text_config, "full_attention_interval")
     if interval_pattern is None:
         interval_pattern = get_config_value(config, "full_attention_interval")
-    if not interval_pattern:
+    if interval_pattern is None:
+        # Mirrors the Qwen 3.5 Transformers config default when the checkpoint
+        # does not provide an explicit full_attention_interval value.
         interval_pattern = 4
+    elif not isinstance(interval_pattern, int) or interval_pattern <= 0:
+        raise ValueError("full_attention_interval must be a positive integer.")
 
     config.layer_types = [
-        "linear_attention" if (layer_idx + 1) % interval_pattern else "full_attention"
+        "full_attention" if (layer_idx + 1) % interval_pattern == 0 else "linear_attention"
         for layer_idx in range(num_hidden_layers)
     ]
 
