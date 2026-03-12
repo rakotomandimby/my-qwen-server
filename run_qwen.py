@@ -10,6 +10,24 @@ from transformers import (
 )
 
 MODEL_NAME = "Qwen/Qwen3.5-2B"
+TEXT_CONFIG_FIELDS = (
+    "attention_dropout",
+    "head_dim",
+    "hidden_act",
+    "hidden_size",
+    "initializer_range",
+    "intermediate_size",
+    "max_position_embeddings",
+    "max_window_layers",
+    "num_attention_heads",
+    "num_hidden_layers",
+    "num_key_value_heads",
+    "rms_norm_eps",
+    "rope_scaling",
+    "rope_theta",
+    "sliding_window",
+    "use_sliding_window",
+)
 
 def ensure_vocab_size(config, tokenizer):
     """Ensures config.vocab_size using text_config.vocab_size, tokenizer.vocab_size, or len(tokenizer)."""
@@ -29,16 +47,24 @@ def ensure_vocab_size(config, tokenizer):
         raise ValueError("Unable to determine vocab_size from config or tokenizer.")
     config.vocab_size = vocab_size
 
-def ensure_hidden_size(config):
-    """Copies hidden_size from text_config when missing at top level."""
+def ensure_text_config_fields(config):
+    """Copies missing ``text_config`` fields to the top level when needed.
+
+    Some Qwen 3.5 checkpoints keep core text-model settings such as
+    ``num_hidden_layers`` under ``config.text_config`` while the installed
+    Transformers model loader still reads them from the top-level config.
+    """
     text_config = getattr(config, "text_config", None)
     if text_config is None:
         return
 
-    if getattr(config, "hidden_size", None) is None:
-        hidden_size = getattr(text_config, "hidden_size", None)
-        if hidden_size is not None:
-            config.hidden_size = hidden_size
+    for key in TEXT_CONFIG_FIELDS:
+        if isinstance(text_config, dict):
+            value = text_config.get(key)
+        else:
+            value = getattr(text_config, key, None)
+        if getattr(config, key, None) is None and value is not None:
+            setattr(config, key, value)
 
 def ensure_pad_token_id(config, tokenizer):
     """Ensure ``config.pad_token_id`` exists before model initialization.
@@ -107,7 +133,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
     ensure_vocab_size(config, tokenizer)
-    ensure_hidden_size(config)
+    ensure_text_config_fields(config)
     ensure_pad_token_id(config, tokenizer)
     
     model_kwargs = {
