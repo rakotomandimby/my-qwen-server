@@ -155,6 +155,9 @@ def get_model_loader(config):
         # Some checkpoints expose the composite Qwen 3.5 config without an
         # architectures hint, but the paired weights still live under the
         # conditional-generation wrapper's ``model.language_model.*`` prefix.
+        # Older/newer Transformers builds do not always surface the Qwen 3.5
+        # ``model_type`` on the same config level, so check both the wrapper
+        # config and the nested text config before falling back.
         if text_config is not None and (model_type == "qwen3_5" or text_model_type == "qwen3_5"):
             return conditional_generation_cls
 
